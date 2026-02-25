@@ -30,6 +30,7 @@ Manage your Kubernetes clusters with Meshery. Deploy Meshery in Kubernetes [in-c
 - [In-cluster Installation](#in-cluster-installation)
   - [Preflight Checks](#preflight-checks)
     - [Preflight: Cluster Connectivity](#preflight-cluster-connectivity)
+    - [Preflight: Kubeconfig Permissions](#preflight-kubeconfig-permissions)
   - [Installation: Using `mesheryctl`](#installation-using-mesheryctl)
   - [Installation: Using Helm](#installation-using-helm)
   - [Post-Installation Steps](#post-installation-steps)
@@ -49,6 +50,92 @@ Read through the following considerations prior to deploying Meshery on Kubernet
 
 Verify your kubeconfig's current context is set to the Kubernetes cluster you want to deploy Meshery to.
 {% capture code_content %}kubectl config current-context{% endcapture %}
+{% include code.html code=code_content %}
+
+### Preflight: Kubeconfig Permissions
+
+Meshery requires specific Kubernetes permissions to connect to and manage your cluster. The kubeconfig you provide must grant access to the following resources.
+
+#### Minimum Permissions for Cluster Connection
+
+For Meshery to successfully connect to your Kubernetes cluster, the kubeconfig must allow:
+
+- **`GET` on the `kube-system` namespace** – Meshery uses the `kube-system` namespace UID as a unique cluster identifier during the connection process.
+- **Discovery API access** – to retrieve cluster server version information.
+- **Non-resource URL `/livez`** – to verify cluster connectivity (ping test).
+
+#### Full Permissions for All Features
+
+For Meshery to use all features—including MeshSync (cluster resource discovery), design pattern deployment, and service mesh management—the kubeconfig must have broad, cluster-wide permissions. The following ClusterRole reflects the minimum required for full Meshery functionality:
+
+{% capture code_content %}apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: meshery-role
+rules:
+- apiGroups:
+  - '*'
+  resources:
+  - '*'
+  verbs:
+  - '*'
+- nonResourceURLs: ["/metrics", "/health", "/ping", "/livez", "/healthz"]
+  verbs:
+  - get
+{% endcapture %}
+{% include code.html code=code_content %}
+
+#### Creating a Dedicated ServiceAccount
+
+If you prefer to use a dedicated ServiceAccount rather than your admin kubeconfig, follow these steps:
+
+**Step 1:** Create a namespace, ServiceAccount, and ClusterRoleBinding:
+{% capture code_content %}kubectl create namespace meshery
+kubectl create serviceaccount meshery -n meshery
+kubectl create clusterrolebinding meshery-binding \
+  --clusterrole=cluster-admin \
+  --serviceaccount=meshery:meshery
+{% endcapture %}
+{% include code.html code=code_content %}
+
+**Step 2:** Apply the ClusterRole and generate a kubeconfig token:
+{% capture code_content %}kubectl apply -f meshery-clusterrole.yaml
+kubectl create token meshery -n meshery --duration=8760h
+{% endcapture %}
+{% include code.html code=code_content %}
+
+#### Verifying Permissions
+
+Use `kubectl auth can-i` to verify that your kubeconfig has the required permissions before connecting Meshery:
+{% capture code_content %}# Verify access to the kube-system namespace (required for connection)
+kubectl auth can-i get namespaces/kube-system
+
+# Verify access to list pods cluster-wide (required for MeshSync)
+kubectl auth can-i list pods --all-namespaces
+
+# Verify access to deploy resources (required for pattern deployment)
+kubectl auth can-i create deployments --all-namespaces
+{% endcapture %}
+{% include code.html code=code_content %}
+
+To verify permissions for a specific ServiceAccount:
+{% capture code_content %}kubectl auth can-i get namespaces/kube-system \
+  --as=system:serviceaccount:meshery:meshery
+{% endcapture %}
+{% include code.html code=code_content %}
+
+#### Troubleshooting Permission Issues
+
+If Meshery cannot connect to your cluster or shows a connection error, check the following:
+
+1. **`kube-system` namespace access** – Meshery reads the `kube-system` namespace UID to uniquely identify your cluster. Without `get` access to this namespace, the connection will fail.
+2. **Cluster reachability** – Meshery pings `/livez` on the Kubernetes API server. Ensure non-resource URL access is granted.
+3. **Discovery API** – Meshery retrieves the server version via the Kubernetes discovery API. Ensure the kubeconfig user has access.
+
+Run the following commands to diagnose permission issues:
+{% capture code_content %}kubectl auth can-i get namespaces/kube-system
+kubectl auth can-i get --non-resource-url=/livez
+{% endcapture %}
 {% include code.html code=code_content %}
 
 ## Installation: Using `mesheryctl`
